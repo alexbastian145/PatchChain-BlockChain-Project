@@ -1,14 +1,28 @@
 import { useEffect, useState } from "react";
 import { parseEther } from "ethers";
 import { getContracts } from "../utils/contracts";
-import { BACKEND_URL, STATUS_LABELS, SEVERITY_LABELS } from "../config";
+import { BACKEND_URL, SEVERITY_LABELS } from "../config";
+import {
+  Alert,
+  Empty,
+  Icon,
+  SkeletonRows,
+  Spinner,
+  Stat,
+  StatusBadge,
+  formatDate,
+  shortAddr,
+} from "./ui.jsx";
+
+const QUICK_AMOUNTS = ["0.1", "0.5", "1", "5"];
 
 export default function OrgDashboard({ signer, address }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [fundAmount, setFundAmount] = useState("0.5");
-  const [actionMessage, setActionMessage] = useState("");
+  const [notice, setNotice] = useState(null); // { tone: info|success|error, text }
+  const [busyKey, setBusyKey] = useState(null);
 
   async function loadReports() {
     if (!address) return;
@@ -31,147 +45,296 @@ export default function OrgDashboard({ signer, address }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 
-  async function handleFund() {
+  // Runs a wallet action with consistent pending / success / error feedback.
+  async function run(key, pendingText, action, successText, { reload = false } = {}) {
+    setBusyKey(key);
+    setNotice({ tone: "info", text: pendingText });
     try {
-      setActionMessage("Funding escrow...");
-      const { escrow } = getContracts(signer);
-      const tx = await escrow.fund({ value: parseEther(fundAmount) });
-      await tx.wait();
-      setActionMessage(`Funded escrow with ${fundAmount} ETH.`);
+      await action();
+      setNotice({ tone: "success", text: successText });
+      if (reload) loadReports();
     } catch (err) {
-      setActionMessage("Error: " + err.message);
+      setNotice({ tone: "error", text: err.message });
+    } finally {
+      setBusyKey(null);
     }
   }
 
-  async function handleApprove(reportId, severity) {
-    try {
-      setActionMessage(`Approving report #${reportId} at severity ${SEVERITY_LABELS[severity]}...`);
-      const { escrow } = getContracts(signer);
-      const tx = await escrow.approveAndPay(reportId, severity);
-      await tx.wait();
-      setActionMessage(`Report #${reportId} approved and paid.`);
-      loadReports();
-    } catch (err) {
-      setActionMessage("Error: " + err.message);
-    }
+  function handleFund() {
+    return run(
+      "fund",
+      "Funding escrow…",
+      async () => {
+        const { escrow } = getContracts(signer);
+        const tx = await escrow.fund({ value: parseEther(fundAmount) });
+        await tx.wait();
+      },
+      `Funded escrow with ${fundAmount} ETH.`
+    );
   }
 
-  async function handleRefundStake(reportId) {
-    try {
-      setActionMessage(`Refunding stake for report #${reportId}...`);
-      const { stakeManager } = getContracts(signer);
-      const tx = await stakeManager.refundStake(reportId);
-      await tx.wait();
-      setActionMessage(`Stake refunded for report #${reportId}.`);
-    } catch (err) {
-      setActionMessage("Error: " + err.message);
-    }
+  function handleApprove(reportId, severity) {
+    return run(
+      `approve-${reportId}`,
+      `Approving report #${reportId} at severity ${SEVERITY_LABELS[severity]}…`,
+      async () => {
+        const { escrow } = getContracts(signer);
+        const tx = await escrow.approveAndPay(reportId, severity);
+        await tx.wait();
+      },
+      `Report #${reportId} approved and paid.`,
+      { reload: true }
+    );
   }
 
-  async function handleDispute(reportId) {
-    try {
-      setActionMessage(`Raising dispute for report #${reportId}...`);
-      const { escrow } = getContracts(signer);
-      const tx = await escrow.raiseDispute(reportId);
-      await tx.wait();
-      setActionMessage(`Dispute raised for report #${reportId}.`);
-      loadReports();
-    } catch (err) {
-      setActionMessage("Error: " + err.message);
-    }
+  function handleRefundStake(reportId) {
+    return run(
+      `refund-${reportId}`,
+      `Refunding stake for report #${reportId}…`,
+      async () => {
+        const { stakeManager } = getContracts(signer);
+        const tx = await stakeManager.refundStake(reportId);
+        await tx.wait();
+      },
+      `Stake refunded for report #${reportId}.`
+    );
   }
+
+  function handleDispute(reportId) {
+    return run(
+      `dispute-${reportId}`,
+      `Raising dispute for report #${reportId}…`,
+      async () => {
+        const { escrow } = getContracts(signer);
+        const tx = await escrow.raiseDispute(reportId);
+        await tx.wait();
+      },
+      `Dispute raised for report #${reportId}.`,
+      { reload: true }
+    );
+  }
+
+  const count = (...statuses) => reports.filter((r) => statuses.includes(r.status)).length;
+  const amountValid = fundAmount.trim() !== "" && Number(fundAmount) > 0;
 
   return (
-    <div>
-      <div className="card">
-        <h2>Fund Bounty Escrow</h2>
-        <p className="hint">Deposit ETH into your organization's bounty pool.</p>
-        <label>Amount (ETH)</label>
-        <input value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} />
-        <button className="btn-primary" onClick={handleFund}>
-          Fund Escrow
-        </button>
-        {actionMessage && <p className="hint">{actionMessage}</p>}
+    <>
+      <div className="stats three">
+        <Stat icon="inbox" value={reports.length} label="Incoming reports" />
+        <Stat
+          icon="clock"
+          value={count("Submitted")}
+          label="Awaiting your review"
+          tone="var(--warning)"
+        />
+        <Stat icon="check" value={count("Validated")} label="Validated" tone="var(--success)" />
       </div>
 
-      <div className="card">
-        <h2>Incoming Reports</h2>
-        {loading && <p className="hint">Loading...</p>}
-        {error && <p className="error-text">{error}</p>}
-        {!loading && reports.length === 0 && <p className="hint">No reports yet.</p>}
+      {notice && (
+        <Alert
+          tone={notice.tone}
+          busy={Boolean(busyKey) && notice.tone === "info"}
+          onDismiss={busyKey ? undefined : () => setNotice(null)}
+        >
+          {notice.text}
+        </Alert>
+      )}
 
-        {reports.map((r) => (
-          <ReportRow
-            key={r.reportId}
-            report={r}
-            onApprove={handleApprove}
-            onRefundStake={handleRefundStake}
-            onDispute={handleDispute}
-          />
-        ))}
+      <div className="split">
+        <section className="card flush">
+          <div className="card-head">
+            <div>
+              <h2>Incoming reports</h2>
+              <p>Assign a severity to approve a payout, or raise a dispute.</p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost sm"
+              onClick={loadReports}
+              disabled={loading}
+            >
+              <Icon name="refresh" size="sm" />
+              Refresh
+            </button>
+          </div>
 
-        <button className="btn-secondary" onClick={loadReports} style={{ marginTop: "1rem" }}>
-          Refresh
-        </button>
+          {error && (
+            <div style={{ padding: "16px 22px 0" }}>
+              <Alert tone="error">{error}</Alert>
+            </div>
+          )}
+
+          {loading && reports.length === 0 ? (
+            <SkeletonRows />
+          ) : reports.length === 0 && !error ? (
+            <Empty title="No reports yet">
+              When researchers submit reports to your organization they'll appear here.
+            </Empty>
+          ) : (
+            <div className="report-list">
+              {reports.map((r) => (
+                <ReportRow
+                  key={r.reportId}
+                  report={r}
+                  busyKey={busyKey}
+                  onApprove={handleApprove}
+                  onRefundStake={handleRefundStake}
+                  onDispute={handleDispute}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <aside className="stack sticky">
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h2>Fund bounty escrow</h2>
+                <p>Deposit ETH into your organization's bounty pool.</p>
+              </div>
+              <span className="stat-icon">
+                <Icon name="coins" />
+              </span>
+            </div>
+
+            <div className="field">
+              <label htmlFor="fund">Amount</label>
+              <div className="input-group">
+                <input
+                  id="fund"
+                  className="input mono"
+                  inputMode="decimal"
+                  value={fundAmount}
+                  onChange={(e) => setFundAmount(e.target.value)}
+                />
+                <span className="suffix">ETH</span>
+              </div>
+            </div>
+
+            <div className="chips" style={{ marginTop: 10 }}>
+              {QUICK_AMOUNTS.map((amt) => (
+                <button
+                  key={amt}
+                  type="button"
+                  className={`chip ${fundAmount === amt ? "on" : ""}`}
+                  onClick={() => setFundAmount(amt)}
+                >
+                  {amt} ETH
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              className="btn btn-primary block"
+              style={{ marginTop: 18 }}
+              onClick={handleFund}
+              disabled={!amountValid || busyKey === "fund"}
+            >
+              {busyKey === "fund" ? (
+                <>
+                  <Spinner /> Funding…
+                </>
+              ) : (
+                <>
+                  <Icon name="coins" /> Fund escrow
+                </>
+              )}
+            </button>
+          </section>
+        </aside>
       </div>
-    </div>
+    </>
   );
 }
 
-function ReportRow({ report, onApprove, onRefundStake, onDispute }) {
+function ReportRow({ report, busyKey, onApprove, onRefundStake, onDispute }) {
   const [severity, setSeverity] = useState(3);
-  const statusClass = "status-" + report.status.replace(" ", "-");
+  const anyBusy = Boolean(busyKey);
+  const id = report.reportId;
 
   return (
-    <div className="report-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <div>
-          <strong>Report #{report.reportId}</strong>
+    <article className="report">
+      <div className="report-top">
+        <span className="report-icon">
+          <Icon name="shield" />
+        </span>
+        <div className="report-main">
+          <h3>
+            Report <span className="mono">#{id}</span>
+          </h3>
           <div className="meta">
-            From {report.researcher.slice(0, 6)}...{report.researcher.slice(-4)} ·{" "}
-            {new Date(report.submittedAt).toLocaleString()}
+            <span>
+              <Icon name="user" size="sm" />
+              <span className="mono">{shortAddr(report.researcher)}</span>
+            </span>
+            <span>
+              <Icon name="clock" size="sm" />
+              {formatDate(report.submittedAt)}
+            </span>
           </div>
         </div>
-        <span className={`status-badge ${statusClass}`}>{report.status}</span>
+        <StatusBadge status={report.status} />
       </div>
 
       {report.status === "Submitted" && (
-        <div style={{ marginTop: "0.75rem" }}>
-          <label style={{ margin: "0 0 0.35rem" }}>Assign Severity & Approve Payout</label>
-          <div className="severity-select">
-            {SEVERITY_LABELS.slice(1).map((label, idx) => (
+        <div className="report-actions">
+          <span className="label">Severity &amp; payout tier</span>
+          <div className="sev" role="radiogroup" aria-label="Severity">
+            {[1, 2, 3, 4].map((level) => (
               <button
-                key={label}
-                className={`severity-btn ${severity === idx + 1 ? "selected" : ""}`}
-                onClick={() => setSeverity(idx + 1)}
+                key={level}
                 type="button"
+                role="radio"
+                aria-checked={severity === level}
+                className={`sev-${SEVERITY_LABELS[level].toLowerCase()} ${
+                  severity === level ? "on" : ""
+                }`}
+                onClick={() => setSeverity(level)}
               >
-                {label}
+                {SEVERITY_LABELS[level]}
               </button>
             ))}
           </div>
-          <div style={{ marginTop: "0.6rem" }}>
-            <button className="btn-primary" onClick={() => onApprove(report.reportId, severity)}>
-              Approve & Pay
+          <div className="row">
+            <button
+              type="button"
+              className="btn btn-success sm"
+              onClick={() => onApprove(id, severity)}
+              disabled={anyBusy}
+            >
+              {busyKey === `approve-${id}` ? <Spinner /> : <Icon name="check" size="sm" />}
+              Approve &amp; pay
             </button>
             <button
-              className="btn-secondary"
-              onClick={() => onDispute(report.reportId)}
-              style={{ marginLeft: "0.5rem" }}
+              type="button"
+              className="btn btn-danger sm"
+              onClick={() => onDispute(id)}
+              disabled={anyBusy}
             >
-              Raise Dispute
+              {busyKey === `dispute-${id}` ? <Spinner /> : <Icon name="alert" size="sm" />}
+              Raise dispute
             </button>
           </div>
         </div>
       )}
 
       {report.status === "Validated" && (
-        <div style={{ marginTop: "0.75rem" }}>
-          <button className="btn-secondary" onClick={() => onRefundStake(report.reportId)}>
-            Refund Researcher Stake
-          </button>
+        <div className="report-actions">
+          <div className="row">
+            <button
+              type="button"
+              className="btn btn-ghost sm"
+              onClick={() => onRefundStake(id)}
+              disabled={anyBusy}
+            >
+              {busyKey === `refund-${id}` ? <Spinner /> : <Icon name="coins" size="sm" />}
+              Refund researcher stake
+            </button>
+          </div>
         </div>
       )}
-    </div>
+    </article>
   );
 }

@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
 import { BACKEND_URL } from "../config";
+import {
+  Alert,
+  Empty,
+  Icon,
+  SkeletonRows,
+  Stat,
+  StatusBadge,
+  formatDate,
+  shortAddr,
+} from "./ui.jsx";
 
-export default function MyReports({ address }) {
+export default function MyReports({ address, onSubmitNew }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -27,32 +37,82 @@ export default function MyReports({ address }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 
+  const count = (...statuses) => reports.filter((r) => statuses.includes(r.status)).length;
+
   return (
-    <div className="card">
-      <h2>My Submitted Reports</h2>
-      {loading && <p className="hint">Loading...</p>}
-      {error && <p className="error-text">{error}</p>}
-      {!loading && reports.length === 0 && <p className="hint">You haven't submitted any reports yet.</p>}
+    <>
+      <div className="stats">
+        <Stat icon="clipboard" value={reports.length} label="Total reports" />
+        <Stat
+          icon="clock"
+          value={count("Submitted", "UnderReview")}
+          label="In review"
+          tone="var(--warning)"
+        />
+        <Stat icon="check" value={count("Validated")} label="Validated" tone="var(--success)" />
+        <Stat icon="ban" value={count("Rejected")} label="Rejected" tone="var(--danger)" />
+      </div>
 
-      {reports.map((r) => {
-        const statusClass = "status-" + r.status.replace(" ", "-");
-        return (
-          <div className="report-row" key={r.reportId}>
-            <div>
-              <strong>Report #{r.reportId}</strong>
-              <div className="meta">
-                To {r.organization.slice(0, 6)}...{r.organization.slice(-4)} ·{" "}
-                {new Date(r.submittedAt).toLocaleString()}
-              </div>
-            </div>
-            <span className={`status-badge ${statusClass}`}>{r.status}</span>
+      {error && <Alert tone="error">{error}</Alert>}
+
+      <section className="card flush">
+        <div className="card-head">
+          <div>
+            <h2>Submitted reports</h2>
+            <p>Everything you've filed from this wallet.</p>
           </div>
-        );
-      })}
+          <button type="button" className="btn btn-ghost sm" onClick={load} disabled={loading}>
+            <Icon name="refresh" size="sm" />
+            Refresh
+          </button>
+        </div>
 
-      <button className="btn-secondary" onClick={load} style={{ marginTop: "1rem" }}>
-        Refresh
-      </button>
-    </div>
+        {loading && reports.length === 0 ? (
+          <SkeletonRows />
+        ) : reports.length === 0 && !error ? (
+          <Empty
+            title="No reports yet"
+            action={
+              onSubmitNew && (
+                <button type="button" className="btn btn-primary" onClick={onSubmitNew}>
+                  <Icon name="filePlus" />
+                  Submit your first report
+                </button>
+              )
+            }
+          >
+            Reports you submit will show up here with their live on-chain status.
+          </Empty>
+        ) : (
+          <div className="report-list">
+            {reports.map((r) => (
+              <article className="report" key={r.reportId}>
+                <div className="report-top">
+                  <span className="report-icon">
+                    <Icon name="shield" />
+                  </span>
+                  <div className="report-main">
+                    <h3>
+                      Report <span className="mono">#{r.reportId}</span>
+                    </h3>
+                    <div className="meta">
+                      <span>
+                        <Icon name="building" size="sm" />
+                        <span className="mono">{shortAddr(r.organization)}</span>
+                      </span>
+                      <span>
+                        <Icon name="clock" size="sm" />
+                        {formatDate(r.submittedAt)}
+                      </span>
+                    </div>
+                  </div>
+                  <StatusBadge status={r.status} />
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </>
   );
 }

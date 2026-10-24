@@ -1,72 +1,259 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useWallet } from "./utils/useWallet";
 import SubmitReport from "./components/SubmitReport.jsx";
 import MyReports from "./components/MyReports.jsx";
 import OrgDashboard from "./components/OrgDashboard.jsx";
+import {
+  Alert,
+  BrandMark,
+  CHAIN_NAMES,
+  FloatingPaths,
+  Icon,
+  shortAddr,
+} from "./components/ui.jsx";
 
-const TABS = [
-  { id: "submit", label: "Submit Report" },
-  { id: "my-reports", label: "My Reports" },
-  { id: "org", label: "Organization Dashboard" },
+const NAV = [
+  {
+    group: "Researcher",
+    items: [
+      {
+        id: "submit",
+        label: "Submit Report",
+        icon: "filePlus",
+        title: "Submit a report",
+        sub: "Encrypted, staked and anchored on-chain",
+      },
+      {
+        id: "my-reports",
+        label: "My Reports",
+        icon: "clipboard",
+        title: "My reports",
+        sub: "Track the status of every disclosure you've filed",
+      },
+    ],
+  },
+  {
+    group: "Organization",
+    items: [
+      {
+        id: "org",
+        label: "Organization Dashboard",
+        icon: "building",
+        title: "Organization dashboard",
+        sub: "Review incoming reports, fund the escrow and pay out bounties",
+      },
+    ],
+  },
 ];
 
+const ALL_ITEMS = NAV.flatMap((g) => g.items);
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem("patchchain:sidebar") === "collapsed";
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
-  const { address, signer, chainId, error, connect } = useWallet();
+  const { address, signer, chainId, error, connect, disconnect } = useWallet();
   const [tab, setTab] = useState("submit");
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [drawer, setDrawer] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("patchchain:sidebar", collapsed ? "collapsed" : "open");
+    } catch {
+      /* storage unavailable */
+    }
+  }, [collapsed]);
+
+  if (!address) {
+    return <ConnectGate onConnect={connect} error={error} />;
+  }
+
+  const current = ALL_ITEMS.find((i) => i.id === tab);
+  const network = chainId ? CHAIN_NAMES[chainId] || `Chain ${chainId}` : null;
+
+  function go(id) {
+    setTab(id);
+    setDrawer(false);
+  }
 
   return (
-    <div>
-      <header className="app-header">
-        <div>
-          <h1>PatchChain</h1>
-          <div className="subtitle">Decentralized Vulnerability Disclosure & Bug Bounty Payouts</div>
-        </div>
-        <div>
-          {address ? (
-            <span className="address-pill">
-              {address.slice(0, 6)}...{address.slice(-4)}
-              {chainId ? ` · chain ${chainId}` : ""}
-            </span>
+    <div className={`shell ${collapsed ? "collapsed" : ""} ${drawer ? "drawer-open" : ""}`}>
+      <aside className="sidebar" aria-label="Primary">
+        <div className="sidebar-head">
+          {collapsed ? (
+            <>
+              <button
+                type="button"
+                className="icon-btn collapse-btn"
+                onClick={() => setCollapsed(false)}
+                aria-label="Expand sidebar"
+              >
+                <Icon name="panel" />
+              </button>
+              <div className="brand">
+                <BrandMark />
+              </div>
+            </>
           ) : (
-            <button className="connect-btn" onClick={connect}>
-              Connect Wallet
-            </button>
+            <>
+              <BrandMark />
+              <button
+                type="button"
+                className="icon-btn collapse-btn"
+                onClick={() => setCollapsed(true)}
+                aria-label="Collapse sidebar"
+              >
+                <Icon name="panel" />
+              </button>
+            </>
           )}
-        </div>
-      </header>
-
-      <nav className="tabs">
-        {TABS.map((t) => (
           <button
-            key={t.id}
-            className={`tab ${tab === t.id ? "active" : ""}`}
-            onClick={() => setTab(t.id)}
+            type="button"
+            className="icon-btn menu-btn-close"
+            onClick={() => setDrawer(false)}
+            aria-label="Close menu"
+            style={{ display: drawer ? "grid" : "none" }}
           >
-            {t.label}
+            <Icon name="x" />
           </button>
-        ))}
-      </nav>
+        </div>
 
-      <div className="container">
-        {error && <p className="error-text">{error}</p>}
+        <nav className="nav">
+          {NAV.map((group) => (
+            <div key={group.group} style={{ display: "contents" }}>
+              <div className="nav-label">{group.group}</div>
+              {group.items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`nav-item ${tab === item.id ? "active" : ""}`}
+                  onClick={() => go(item.id)}
+                  aria-current={tab === item.id ? "page" : undefined}
+                  title={collapsed ? item.label : undefined}
+                >
+                  <Icon name={item.icon} />
+                  <span className="label-text">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
 
-        {!address && (
-          <div className="card">
-            <h2>Connect Your Wallet to Continue</h2>
-            <p className="hint">
-              PatchChain requires MetaMask to submit reports, fund bounties, and approve payouts
-              directly on-chain.
-            </p>
-            <button className="connect-btn" onClick={connect}>
-              Connect Wallet
+        <div className="sidebar-foot">
+          <div className="account">
+            <span className="avatar" aria-hidden="true">
+              {address.slice(2, 4).toUpperCase()}
+            </span>
+            <div className="account-meta">
+              <strong className="mono">{shortAddr(address)}</strong>
+              <span>{network || "Connected"}</span>
+            </div>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={disconnect}
+              aria-label="Disconnect wallet"
+              title="Disconnect"
+            >
+              <Icon name="logout" />
             </button>
           </div>
-        )}
+        </div>
+      </aside>
 
-        {address && tab === "submit" && <SubmitReport signer={signer} />}
-        {address && tab === "my-reports" && <MyReports address={address} />}
-        {address && tab === "org" && <OrgDashboard signer={signer} address={address} />}
+      <div className="scrim" onClick={() => setDrawer(false)} />
+
+      <div className="main">
+        <header className="topbar">
+          <button
+            type="button"
+            className="icon-btn menu-btn"
+            onClick={() => setDrawer(true)}
+            aria-label="Open menu"
+          >
+            <Icon name="menu" />
+          </button>
+          <div className="topbar-title">
+            <h1>{current.title}</h1>
+            <p>{current.sub}</p>
+          </div>
+          {network && (
+            <span className="pill hide-sm">
+              <span className="dot" />
+              {network}
+            </span>
+          )}
+        </header>
+
+        <main className="page">
+          {error && <Alert tone="error">{error}</Alert>}
+
+          {tab === "submit" && <SubmitReport signer={signer} />}
+          {tab === "my-reports" && <MyReports address={address} onSubmitNew={() => go("submit")} />}
+          {tab === "org" && <OrgDashboard signer={signer} address={address} />}
+        </main>
       </div>
     </div>
+  );
+}
+
+function ConnectGate({ onConnect, error }) {
+  return (
+    <main className="gate">
+      <section className="gate-hero">
+        <BrandMark large />
+        <FloatingPaths />
+        <div className="gate-copy">
+          <h2>
+            Disclose vulnerabilities. <span>Get paid on-chain.</span>
+          </h2>
+          <p>
+            Researchers stake, organizations validate, and the escrow pays out automatically — no
+            middlemen, no disputes over who reported first.
+          </p>
+          <ul className="gate-points">
+            <li>
+              <Icon name="lock" /> Reports are encrypted and pinned to IPFS
+            </li>
+            <li>
+              <Icon name="clock" /> Hash and timestamp anchored on-chain as proof of discovery
+            </li>
+            <li>
+              <Icon name="coins" /> Severity-tiered bounties released from escrow
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section className="gate-panel">
+        <div className="gate-form">
+          <div className="gate-mobile-brand">
+            <BrandMark large />
+          </div>
+          <div>
+            <h1>Connect your wallet</h1>
+            <p className="lead">
+              PatchChain uses MetaMask to sign submissions, fund bounties and approve payouts
+              directly on-chain.
+            </p>
+          </div>
+
+          {error && <Alert tone="error">{error}</Alert>}
+
+          <button type="button" className="btn btn-primary block" onClick={onConnect}>
+            <Icon name="wallet" />
+            Connect MetaMask
+          </button>
+
+          <p className="gate-foot">Your keys never leave your wallet.</p>
+        </div>
+      </section>
+    </main>
   );
 }

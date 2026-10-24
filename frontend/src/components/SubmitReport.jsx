@@ -2,14 +2,17 @@ import { useState } from "react";
 import { parseEther } from "ethers";
 import { getContracts } from "../utils/contracts";
 import { BACKEND_URL, REQUIRED_STAKE_ETH } from "../config";
+import { Alert, CopyButton, Icon, Spinner } from "./ui.jsx";
+
+const EMPTY_FORM = {
+  organization: "",
+  title: "",
+  description: "",
+  stepsToReproduce: "",
+};
 
 export default function SubmitReport({ signer }) {
-  const [form, setForm] = useState({
-    organization: "",
-    title: "",
-    description: "",
-    stepsToReproduce: "",
-  });
+  const [form, setForm] = useState(EMPTY_FORM);
   const [status, setStatus] = useState("idle"); // idle | preparing | submitting | done | error
   const [message, setMessage] = useState("");
   const [reportId, setReportId] = useState(null);
@@ -54,7 +57,7 @@ export default function SubmitReport({ signer }) {
       );
       const receipt = await tx.wait();
 
-      // Pull the reportId out of the ReportSubmitted event emitted by the registry.
+      // Pull the reportId out of the StakeDeposited event emitted by the stake manager.
       const event = receipt.logs
         .map((log) => {
           try {
@@ -75,80 +78,184 @@ export default function SubmitReport({ signer }) {
     }
   }
 
+  function reset() {
+    setForm(EMPTY_FORM);
+    setReportId(null);
+    setMessage("");
+    setStatus("idle");
+  }
+
+  const busy = status === "preparing" || status === "submitting";
+
   if (status === "done") {
     return (
-      <div className="card">
-        <h2>Report Submitted</h2>
-        <p className="success-text">{message}</p>
+      <div className="card done-card">
+        <span className="done-icon">
+          <Icon name="check" size="lg" />
+        </span>
+        <h2>Report submitted</h2>
+        <p>{message} Your stake is held until the organization validates the report.</p>
+
         {reportId !== null && (
-          <p>
-            Report ID: <strong>{reportId}</strong> — save this to track its status.
-          </p>
+          <div className="idbox">
+            <div>
+              <small>Report ID</small>
+              <strong>#{reportId}</strong>
+            </div>
+            <CopyButton text={reportId} label="Copy ID" />
+          </div>
         )}
-        <button className="btn-secondary" onClick={() => setStatus("idle")}>
-          Submit Another Report
+        <p className="help" style={{ fontSize: "0.8rem", color: "var(--faint)" }}>
+          Keep this ID — you'll use it to track the report under My Reports.
+        </p>
+
+        <button type="button" className="btn btn-ghost" onClick={reset} style={{ marginTop: 6 }}>
+          <Icon name="filePlus" />
+          Submit another report
         </button>
       </div>
     );
   }
 
+  // Timeline state: which stage is running / finished.
+  const stage = status === "preparing" ? 0 : status === "submitting" ? 1 : -1;
+  const stepClass = (i) => (stage === i ? "active" : stage > i ? "done" : "");
+
   return (
-    <div className="card">
-      <h2>Submit a Vulnerability Report</h2>
-      <p className="hint">
-        Your report content is encrypted and stored on IPFS. Only a hash and timestamp are
-        recorded on-chain. A stake of {REQUIRED_STAKE_ETH} ETH is required and refunded once the
-        organization validates your report.
-      </p>
+    <div className="split">
+      <form className="card" onSubmit={handleSubmit}>
+        <div className="card-head">
+          <div>
+            <h2>Vulnerability details</h2>
+            <p>The content is encrypted before it leaves your session — only a hash goes on-chain.</p>
+          </div>
+        </div>
 
-      <form onSubmit={handleSubmit}>
-        <label>Organization Wallet Address</label>
-        <input
-          type="text"
-          placeholder="0x..."
-          value={form.organization}
-          onChange={(e) => update("organization", e.target.value)}
-          required
-        />
+        <div className="field">
+          <label htmlFor="org">Organization wallet address</label>
+          <input
+            id="org"
+            className="input mono"
+            type="text"
+            placeholder="0x…"
+            autoComplete="off"
+            spellCheck={false}
+            value={form.organization}
+            onChange={(e) => update("organization", e.target.value)}
+            required
+          />
+          <span className="help">The organization that will validate the report and pay the bounty.</span>
+        </div>
 
-        <label>Vulnerability Title</label>
-        <input
-          type="text"
-          placeholder="e.g. Stored XSS in profile bio field"
-          value={form.title}
-          onChange={(e) => update("title", e.target.value)}
-          required
-        />
+        <div className="field">
+          <label htmlFor="title">Vulnerability title</label>
+          <input
+            id="title"
+            className="input"
+            type="text"
+            placeholder="e.g. Stored XSS in profile bio field"
+            value={form.title}
+            onChange={(e) => update("title", e.target.value)}
+            required
+          />
+        </div>
 
-        <label>Description</label>
-        <textarea
-          placeholder="Describe the vulnerability, its impact, and affected component."
-          value={form.description}
-          onChange={(e) => update("description", e.target.value)}
-          required
-        />
+        <div className="field">
+          <label htmlFor="desc">Description</label>
+          <textarea
+            id="desc"
+            className="textarea"
+            placeholder="Describe the vulnerability, its impact, and the affected component."
+            value={form.description}
+            onChange={(e) => update("description", e.target.value)}
+            required
+          />
+        </div>
 
-        <label>Steps to Reproduce</label>
-        <textarea
-          placeholder="1. Navigate to...&#10;2. Submit...&#10;3. Observe..."
-          value={form.stepsToReproduce}
-          onChange={(e) => update("stepsToReproduce", e.target.value)}
-        />
+        <div className="field">
+          <label htmlFor="steps">
+            Steps to reproduce <span className="opt">optional</span>
+          </label>
+          <textarea
+            id="steps"
+            className="textarea"
+            placeholder={"1. Navigate to…\n2. Submit…\n3. Observe…"}
+            value={form.stepsToReproduce}
+            onChange={(e) => update("stepsToReproduce", e.target.value)}
+          />
+        </div>
+
+        {message && (status === "error" || busy) && (
+          <div style={{ marginTop: 16 }}>
+            <Alert tone={status === "error" ? "error" : "info"} busy={busy}>
+              {message}
+            </Alert>
+          </div>
+        )}
 
         <button
           type="submit"
-          className="btn-primary"
-          disabled={status === "preparing" || status === "submitting"}
+          className="btn btn-primary block"
+          style={{ marginTop: 20 }}
+          disabled={busy}
         >
-          {status === "preparing" || status === "submitting"
-            ? "Processing..."
-            : `Submit Report (stake ${REQUIRED_STAKE_ETH} ETH)`}
+          {busy ? (
+            <>
+              <Spinner /> Processing…
+            </>
+          ) : (
+            <>
+              <Icon name="lock" /> Encrypt &amp; submit · stake {REQUIRED_STAKE_ETH} ETH
+            </>
+          )}
         </button>
-
-        {message && status !== "done" && (
-          <p className={status === "error" ? "error-text" : "hint"}>{message}</p>
-        )}
       </form>
+
+      <aside className="stack sticky">
+        <div className="stake">
+          <span className="stat-icon">
+            <Icon name="coins" />
+          </span>
+          <div>
+            <div className="stake-value">
+              {REQUIRED_STAKE_ETH}
+              <small>ETH stake</small>
+            </div>
+            <p>Refunded once the organization validates your report.</p>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-head" style={{ marginBottom: 16 }}>
+            <div>
+              <h2>How it works</h2>
+            </div>
+          </div>
+          <ol className="timeline">
+            <li className={stepClass(0)}>
+              <span className="tl-dot">{stage > 0 ? <Icon name="check" size="sm" /> : 1}</span>
+              <div>
+                <strong>Encrypt &amp; pin</strong>
+                <span>The report is encrypted and the ciphertext is uploaded to IPFS.</span>
+              </div>
+            </li>
+            <li className={stepClass(1)}>
+              <span className="tl-dot">{stage > 1 ? <Icon name="check" size="sm" /> : 2}</span>
+              <div>
+                <strong>Stake &amp; sign</strong>
+                <span>You confirm the staked transaction from your own wallet.</span>
+              </div>
+            </li>
+            <li className={stepClass(2)}>
+              <span className="tl-dot">3</span>
+              <div>
+                <strong>Anchored on-chain</strong>
+                <span>Hash and timestamp are recorded as proof you found it first.</span>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </aside>
     </div>
   );
 }
