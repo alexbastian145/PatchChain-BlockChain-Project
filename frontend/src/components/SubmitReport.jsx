@@ -1,8 +1,10 @@
-import { useState } from "react";
-import { parseEther } from "ethers";
-import { getContracts } from "../utils/contracts";
-import { BACKEND_URL, REQUIRED_STAKE_ETH } from "../config";
-import { Alert, CopyButton, Icon, Spinner } from "./ui.jsx";
+import { useEffect, useState } from "react";
+import { ZeroHash, isAddress } from "ethers";
+import { getContracts, errorMessage } from "../utils/contracts";
+import { encryptReport } from "../utils/e2ee";
+import { pinEnvelope } from "../utils/api";
+import { RANKS } from "../config";
+import { Alert, CopyButton, Icon, RankBadge, Spinner, formatEth } from "./ui.jsx";
 
 const EMPTY_FORM = {
   organization: "",
@@ -11,11 +13,61 @@ const EMPTY_FORM = {
   stepsToReproduce: "",
 };
 
-export default function SubmitReport({ signer }) {
+export default function SubmitReport({ signer, address, crypto }) {
   const [form, setForm] = useState(EMPTY_FORM);
-  const [status, setStatus] = useState("idle"); // idle | preparing | submitting | done | error
+  const [status, setStatus] = useState("idle"); // idle | encrypting | submitting | done | error
   const [message, setMessage] = useState("");
   const [reportId, setReportId] = useState(null);
+
+  const [stake, setStake] = useState(null); // bigint, from the chain
+  const [rank, setRank] = useState(0);
+  const [orgKey, setOrgKey] = useState(undefined); // undefined = unknown, null = none, string = key
+
+  // What this researcher pays depends on their reputation, so read it from the contract.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { stakeManager, reputation } = getContracts(signer);
+        const [required, r] = await Promise.all([
+          stakeManager.requiredStakeFor(address),
+          reputation.rankOf(address),
+        ]);
+        if (!cancelled) {
+          setStake(required);
+          setRank(Number(r));
+        }
+      } catch {
+        /* leave as unknown; submit stays disabled until it loads */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [signer, address, status]);
+
+  // Look up the organization's published encryption key as the address is typed.
+  useEffect(() => {
+    const org = form.organization.trim();
+    if (!isAddress(org)) {
+      setOrgKey(undefined);
+      return undefined;
+    }
+    let cancelled = false;
+    setOrgKey(undefined);
+    (async () => {
+      try {
+        const { keyRegistry } = getContracts(signer);
+        const key = await keyRegistry.publicKeyOf(org);
+        if (!cancelled) setOrgKey(key === ZeroHash ? null : key);
+      } catch {
+        if (!cancelled) setOrgKey(undefined);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [form.organization, signer]);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -30,34 +82,42 @@ export default function SubmitReport({ signer }) {
     }
 
     try {
-      // Step 1: backend encrypts the report and uploads the ciphertext to IPFS,
-      // returning the hash + CID the contract call needs.
-      setStatus("preparing");
-      setMessage("Encrypting report and uploading to IPFS...");
+      const organization = form.organization.trim();
+      if (!isAddress(organization)) throw new Error("Enter a valid organization wallet address.");
+      if (!orgKey) throw new Error("This organization has not published an encryption key yet.");
+      if (stake === null) throw new Error("Still loading your stake amount — try again in a moment.");
 
-      const prepRes = await fetch(`${BACKEND_URL}/api/reports/prepare`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      const prepData = await prepRes.json();
-      if (!prepRes.ok) throw new Error(prepData.error || "Failed to prepare report");
+      // Step 1: derive our key (a free signature), then encrypt IN THE BROWSER for the
+      // organization and for ourselves. The server never sees plaintext or any key.
+      setStatus("encrypting");
+      setMessage("Sign the message in your wallet to unlock your encryption key…");
+      const keys = await crypto.ensureKeys();
 
-      // Step 2: researcher's own wallet sends the staked submission transaction —
-      // the backend never touches researcher funds.
+      setMessage("Encrypting your report and pinning the ciphertext to IPFS…");
+      const { envelopeBytes, reportHash } = encryptReport(
+        {
+          title: form.title,
+          description: form.description,
+          stepsToReproduce: form.stepsToReproduce,
+          preparedAt: new Date().toISOString(),
+        },
+        { [organization]: orgKey, [address]: keys.publicKeyHex }
+      );
+      const pinned = await pinEnvelope(envelopeBytes);
+      if (pinned.reportHash.toLowerCase() !== reportHash.toLowerCase()) {
+        throw new Error("The pinning service returned a different hash than expected. Nothing was submitted.");
+      }
+
+      // Step 2: our own wallet sends the staked transaction — the backend never touches funds.
       setStatus("submitting");
-      setMessage("Confirm the transaction in MetaMask (stake: " + REQUIRED_STAKE_ETH + " ETH)...");
+      setMessage(`Confirm the transaction in your wallet (stake: ${formatEth(stake)} ETH)…`);
 
       const { stakeManager } = getContracts(signer);
-      const tx = await stakeManager.submitReportWithStake(
-        prepData.organization,
-        prepData.reportHash,
-        prepData.cid,
-        { value: parseEther(REQUIRED_STAKE_ETH) }
-      );
+      const tx = await stakeManager.submitReportWithStake(organization, reportHash, pinned.cid, {
+        value: stake,
+      });
       const receipt = await tx.wait();
 
-      // Pull the reportId out of the StakeDeposited event emitted by the stake manager.
       const event = receipt.logs
         .map((log) => {
           try {
@@ -70,11 +130,11 @@ export default function SubmitReport({ signer }) {
 
       setReportId(event ? event.args.reportId.toString() : null);
       setStatus("done");
-      setMessage("Report submitted and recorded on-chain.");
+      setMessage("Report encrypted, pinned and recorded on-chain.");
     } catch (err) {
       console.error(err);
       setStatus("error");
-      setMessage(err.message || "Submission failed");
+      setMessage(errorMessage(err));
     }
   }
 
@@ -85,7 +145,7 @@ export default function SubmitReport({ signer }) {
     setStatus("idle");
   }
 
-  const busy = status === "preparing" || status === "submitting";
+  const busy = status === "encrypting" || status === "submitting";
 
   if (status === "done") {
     return (
@@ -105,8 +165,8 @@ export default function SubmitReport({ signer }) {
             <CopyButton text={reportId} label="Copy ID" />
           </div>
         )}
-        <p className="help" style={{ fontSize: "0.8rem", color: "var(--faint)" }}>
-          Keep this ID — you'll use it to track the report under My Reports.
+        <p className="help-text">
+          Only you and the organization can read it. Find it again under My Reports.
         </p>
 
         <button type="button" className="btn btn-ghost" onClick={reset} style={{ marginTop: 6 }}>
@@ -117,9 +177,10 @@ export default function SubmitReport({ signer }) {
     );
   }
 
-  // Timeline state: which stage is running / finished.
-  const stage = status === "preparing" ? 0 : status === "submitting" ? 1 : -1;
+  const stage = status === "encrypting" ? 0 : status === "submitting" ? 1 : -1;
   const stepClass = (i) => (stage === i ? "active" : stage > i ? "done" : "");
+  const orgChecked = isAddress(form.organization.trim());
+  const blocked = orgChecked && orgKey === null;
 
   return (
     <div className="split">
@@ -127,7 +188,7 @@ export default function SubmitReport({ signer }) {
         <div className="card-head">
           <div>
             <h2>Vulnerability details</h2>
-            <p>The content is encrypted before it leaves your session — only a hash goes on-chain.</p>
+            <p>Encrypted in your browser before it leaves your device — only a hash goes on-chain.</p>
           </div>
         </div>
 
@@ -144,8 +205,24 @@ export default function SubmitReport({ signer }) {
             onChange={(e) => update("organization", e.target.value)}
             required
           />
-          <span className="help">The organization that will validate the report and pay the bounty.</span>
+          {orgChecked && orgKey && (
+            <span className="help ok">
+              <Icon name="lock" size="sm" /> Encryption key found — the report will be readable only by them and you.
+            </span>
+          )}
+          {!orgChecked && (
+            <span className="help">The organization that will validate the report and pay the bounty.</span>
+          )}
         </div>
+
+        {blocked && (
+          <div style={{ marginTop: 14 }}>
+            <Alert tone="warn">
+              This organization hasn't published an encryption key, so a report can't be encrypted for
+              them. Ask them to open their dashboard and click <strong>Create &amp; publish key</strong>.
+            </Alert>
+          </div>
+        )}
 
         <div className="field">
           <label htmlFor="title">Vulnerability title</label>
@@ -197,7 +274,7 @@ export default function SubmitReport({ signer }) {
           type="submit"
           className="btn btn-primary block"
           style={{ marginTop: 20 }}
-          disabled={busy}
+          disabled={busy || blocked || stake === null}
         >
           {busy ? (
             <>
@@ -205,7 +282,7 @@ export default function SubmitReport({ signer }) {
             </>
           ) : (
             <>
-              <Icon name="lock" /> Encrypt &amp; submit · stake {REQUIRED_STAKE_ETH} ETH
+              <Icon name="lock" /> Encrypt &amp; submit · stake {stake === null ? "…" : formatEth(stake)} ETH
             </>
           )}
         </button>
@@ -218,10 +295,15 @@ export default function SubmitReport({ signer }) {
           </span>
           <div>
             <div className="stake-value">
-              {REQUIRED_STAKE_ETH}
+              {stake === null ? "…" : formatEth(stake)}
               <small>ETH stake</small>
             </div>
-            <p>Refunded once the organization validates your report.</p>
+            <p>
+              <RankBadge rank={rank} />{" "}
+              {rank > 0
+                ? `${RANKS[rank].discount} off thanks to your reputation.`
+                : "Earn reputation to lower your stake."}
+            </p>
           </div>
         </div>
 
@@ -236,7 +318,7 @@ export default function SubmitReport({ signer }) {
               <span className="tl-dot">{stage > 0 ? <Icon name="check" size="sm" /> : 1}</span>
               <div>
                 <strong>Encrypt &amp; pin</strong>
-                <span>The report is encrypted and the ciphertext is uploaded to IPFS.</span>
+                <span>Encrypted in your browser to the organization's key, then the ciphertext is pinned to IPFS.</span>
               </div>
             </li>
             <li className={stepClass(1)}>

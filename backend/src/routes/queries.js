@@ -2,6 +2,8 @@ const express = require("express");
 const { ethers } = require("ethers");
 const { getContracts } = require("../utils/contracts");
 
+const STATUS = ["Submitted", "UnderReview", "Validated", "Rejected", "Disclosed"];
+
 const router = express.Router();
 
 /**
@@ -12,7 +14,7 @@ const router = express.Router();
  */
 router.get("/organizations/:address/reports", async (req, res) => {
   try {
-    const { registry } = getContracts();
+    const { registry, escrow } = getContracts();
     const address = req.params.address;
     if (!ethers.isAddress(address)) {
       return res.status(400).json({ error: "Invalid organization address" });
@@ -30,7 +32,8 @@ router.get("/organizations/:address/reports", async (req, res) => {
           reportHash: r.reportHash,
           ipfsCID: r.ipfsCID,
           submittedAt: new Date(Number(r.submittedAt) * 1000).toISOString(),
-          status: ["Submitted", "UnderReview", "Validated", "Rejected", "Disclosed"][r.status],
+          status: STATUS[r.status],
+          payoutState: Number(await escrow.payoutState(ev.args.reportId)),
           severity: Number(r.severity),
         };
       })
@@ -49,7 +52,7 @@ router.get("/organizations/:address/reports", async (req, res) => {
  */
 router.get("/researchers/:address/reports", async (req, res) => {
   try {
-    const { registry } = getContracts();
+    const { registry, escrow } = getContracts();
     const address = req.params.address;
     if (!ethers.isAddress(address)) {
       return res.status(400).json({ error: "Invalid researcher address" });
@@ -64,8 +67,11 @@ router.get("/researchers/:address/reports", async (req, res) => {
         return {
           reportId: Number(ev.args.reportId),
           organization: r.organization,
+          reportHash: r.reportHash,
+          ipfsCID: r.ipfsCID,
           submittedAt: new Date(Number(r.submittedAt) * 1000).toISOString(),
-          status: ["Submitted", "UnderReview", "Validated", "Rejected", "Disclosed"][r.status],
+          status: STATUS[r.status],
+          payoutState: Number(await escrow.payoutState(ev.args.reportId)),
           severity: Number(r.severity),
         };
       })

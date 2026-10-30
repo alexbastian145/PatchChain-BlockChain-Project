@@ -3,6 +3,9 @@ import { useWallet } from "./utils/useWallet";
 import SubmitReport from "./components/SubmitReport.jsx";
 import MyReports from "./components/MyReports.jsx";
 import OrgDashboard from "./components/OrgDashboard.jsx";
+import Reputation from "./components/Reputation.jsx";
+import Arbitration from "./components/Arbitration.jsx";
+import { useCrypto } from "./utils/useCrypto";
 import {
   Alert,
   BrandMark,
@@ -28,7 +31,14 @@ const NAV = [
         label: "My Reports",
         icon: "clipboard",
         title: "My reports",
-        sub: "Track the status of every disclosure you've filed",
+        sub: "Track, read and disclose every report you've filed",
+      },
+      {
+        id: "reputation",
+        label: "Reputation",
+        icon: "award",
+        title: "Reputation",
+        sub: "A soulbound badge that lowers your stake as you earn trust",
       },
     ],
   },
@@ -41,6 +51,18 @@ const NAV = [
         icon: "building",
         title: "Organization dashboard",
         sub: "Review incoming reports, fund the escrow and pay out bounties",
+      },
+    ],
+  },
+  {
+    group: "Justice",
+    items: [
+      {
+        id: "arbitration",
+        label: "Arbitration",
+        icon: "scale",
+        title: "Arbitration court",
+        sub: "Disputes decided by a staked jury with sealed, commit-reveal votes",
       },
     ],
   },
@@ -61,6 +83,7 @@ export default function App() {
   const [tab, setTab] = useState("submit");
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [drawer, setDrawer] = useState(false);
+  const crypto = useCrypto(signer, address);
 
   useEffect(() => {
     try {
@@ -194,9 +217,19 @@ export default function App() {
         <main className="page">
           {error && <Alert tone="error">{error}</Alert>}
 
-          {tab === "submit" && <SubmitReport signer={signer} />}
-          {tab === "my-reports" && <MyReports address={address} onSubmitNew={() => go("submit")} />}
-          {tab === "org" && <OrgDashboard signer={signer} address={address} />}
+          {tab === "submit" && <SubmitReport signer={signer} address={address} crypto={crypto} />}
+          {tab === "my-reports" && (
+            <MyReports
+              address={address}
+              signer={signer}
+              crypto={crypto}
+              onSubmitNew={() => go("submit")}
+              onGoArbitration={() => go("arbitration")}
+            />
+          )}
+          {tab === "reputation" && <Reputation signer={signer} address={address} />}
+          {tab === "org" && <OrgDashboard signer={signer} address={address} crypto={crypto} />}
+          {tab === "arbitration" && <Arbitration signer={signer} address={address} crypto={crypto} />}
         </main>
       </div>
     </div>
@@ -219,13 +252,13 @@ function ConnectGate({ onConnect, error }) {
           </p>
           <ul className="gate-points">
             <li>
-              <Icon name="lock" /> Reports are encrypted and pinned to IPFS
+              <Icon name="lock" /> Reports are end-to-end encrypted in your browser
             </li>
             <li>
               <Icon name="clock" /> Hash and timestamp anchored on-chain as proof of discovery
             </li>
             <li>
-              <Icon name="coins" /> Severity-tiered bounties released from escrow
+              <Icon name="scale" /> Disputes decided by a staked jury, not a single party
             </li>
           </ul>
         </div>

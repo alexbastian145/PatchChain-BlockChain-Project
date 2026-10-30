@@ -11,6 +11,8 @@ module.exports = {
   },
   networks: {
     hardhat: {},
+    // `npx hardhat node` in another terminal, then deploy with --network localhost
+    localhost: { url: "http://127.0.0.1:8545" },
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],

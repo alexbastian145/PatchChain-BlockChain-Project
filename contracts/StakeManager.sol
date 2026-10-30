@@ -2,16 +2,21 @@
 pragma solidity ^0.8.24;
 
 import "./VulnerabilityRegistry.sol";
+import "./ReputationNFT.sol";
 
 /// @title StakeManager
 /// @notice Requires a researcher to stake a small deposit when submitting a report,
 /// discouraging spam/duplicate submissions. The deposit is refunded on a valid
 /// report and forfeited (sent to the organization) on a rejected/spam report.
+///
+/// Researchers with a good track record (see ReputationNFT) post a reduced stake:
+/// 100% / 75% / 50% / 25% of the base amount by rank.
 contract StakeManager {
     VulnerabilityRegistry public registry;
+    IReputation public reputation; // optional; address(0) disables stake discounts
     address public owner;
 
-    uint256 public requiredStake; // in wei
+    uint256 public requiredStake; // base stake, in wei
 
     enum StakeState {
         None,
@@ -27,6 +32,7 @@ contract StakeManager {
     event StakeRefunded(uint256 indexed reportId, address indexed researcher, uint256 amount);
     event StakeForfeited(uint256 indexed reportId, address indexed organization, uint256 amount);
     event RequiredStakeUpdated(uint256 newAmount);
+    event ReputationSet(address indexed reputation);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "StakeManager: not owner");
@@ -45,13 +51,24 @@ contract StakeManager {
         emit RequiredStakeUpdated(newAmount);
     }
 
+    function setReputation(address reputationAddress) external onlyOwner {
+        reputation = IReputation(reputationAddress);
+        emit ReputationSet(reputationAddress);
+    }
+
+    /// @notice The exact stake this researcher must send, after any reputation discount.
+    function requiredStakeFor(address researcher) public view returns (uint256) {
+        if (address(reputation) == address(0)) return requiredStake;
+        return (requiredStake * reputation.stakeMultiplierBps(researcher)) / 10000;
+    }
+
     /// @notice Submit a report together with the required stake, in one transaction.
     function submitReportWithStake(
         address organization,
         bytes32 reportHash,
         string calldata ipfsCID
     ) external payable returns (uint256 reportId) {
-        require(msg.value == requiredStake, "StakeManager: incorrect stake amount");
+        require(msg.value == requiredStakeFor(msg.sender), "StakeManager: incorrect stake amount");
 
         reportId = registry.submitReportFor(msg.sender, organization, reportHash, ipfsCID);
         stakeState[reportId] = StakeState.Staked;
@@ -89,6 +106,12 @@ contract StakeManager {
 
         (bool sent, ) = r.organization.call{value: amount}("");
         require(sent, "StakeManager: forfeit transfer failed");
+
+        // A spam strike counts against the researcher's reputation. Never let a
+        // reputation failure block the forfeit itself.
+        if (address(reputation) != address(0)) {
+            try reputation.recordRejected(r.researcher) {} catch {}
+        }
 
         emit StakeForfeited(reportId, r.organization, amount);
     }

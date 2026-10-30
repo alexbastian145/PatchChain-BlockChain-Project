@@ -2,13 +2,18 @@
 pragma solidity ^0.8.24;
 
 import "./VulnerabilityRegistry.sol";
+import "./ReputationNFT.sol";
 
 /// @title BountyEscrow
 /// @notice Lets an organization fund a severity-tiered bounty pool, then
 /// automatically releases the correct payout to a researcher once their
 /// report is validated and assigned a severity level.
+///
+/// Disputes are resolved by the `arbitrator`. In a full PatchChain deployment that is
+/// the ArbitrationCourt contract (a staked, commit-reveal jury), not a single account.
 contract BountyEscrow {
     VulnerabilityRegistry public registry;
+    IReputation public reputation; // optional; address(0) disables reputation credits
     address public owner;
 
     // organization => severity tier (1-4) => bounty amount in wei
@@ -52,6 +57,23 @@ contract BountyEscrow {
         arbitrator = newArbitrator;
     }
 
+    function setReputation(address reputationAddress) external onlyOwner {
+        reputation = IReputation(reputationAddress);
+    }
+
+    // Reputation credits must never be able to block a payout, hence try/catch.
+    function _creditValidated(address researcher, uint8 severity) private {
+        if (address(reputation) != address(0)) {
+            try reputation.recordValidated(researcher, severity) {} catch {}
+        }
+    }
+
+    function _creditRejected(address researcher) private {
+        if (address(reputation) != address(0)) {
+            try reputation.recordRejected(researcher) {} catch {}
+        }
+    }
+
     /// @notice Organization deposits funds into its bounty pool.
     function fund() external payable {
         require(msg.value > 0, "Escrow: zero funding");
@@ -87,6 +109,8 @@ contract BountyEscrow {
         (bool sent, ) = r.researcher.call{value: amount}("");
         require(sent, "Escrow: payout transfer failed");
 
+        _creditValidated(r.researcher, severity);
+
         emit BountyReleased(reportId, r.researcher, severity, amount);
     }
 
@@ -111,6 +135,7 @@ contract BountyEscrow {
         if (payResearcher) {
             require(severity >= 1 && severity <= 4, "Escrow: severity out of range");
             uint256 amount = bountyTiers[r.organization][severity];
+            require(amount > 0, "Escrow: bounty tier not set");
             require(orgBalance[r.organization] >= amount, "Escrow: insufficient organization balance");
 
             orgBalance[r.organization] -= amount;
@@ -121,10 +146,13 @@ contract BountyEscrow {
             (bool sent, ) = r.researcher.call{value: amount}("");
             require(sent, "Escrow: payout transfer failed");
 
+            _creditValidated(r.researcher, severity);
+
             emit BountyReleased(reportId, r.researcher, severity, amount);
         } else {
             payoutState[reportId] = PayoutState.NotPaid;
             registry.updateStatus(reportId, VulnerabilityRegistry.Status.Rejected);
+            _creditRejected(r.researcher);
         }
 
         emit DisputeResolved(reportId, payResearcher);

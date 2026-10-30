@@ -20,8 +20,13 @@ contract DisclosureTimer {
     mapping(uint256 => uint256) public deadline; // reportId => unix timestamp
     mapping(uint256 => bool) public disclosed;
 
+    // Content keys published after disclosure, so anyone can decrypt the (public) report.
+    mapping(uint256 => bytes32) public disclosureKey;
+    mapping(uint256 => bool) public keyPublished;
+
     event DeadlineSet(uint256 indexed reportId, uint256 deadline);
     event AutoDisclosed(uint256 indexed reportId, uint256 disclosedAt);
+    event DisclosureKeyPublished(uint256 indexed reportId, bytes32 contentKey);
     event DisclosureWindowUpdated(uint256 newWindow);
 
     modifier onlyOwner() {
@@ -68,6 +73,23 @@ contract DisclosureTimer {
         registry.updateStatus(reportId, VulnerabilityRegistry.Status.Disclosed);
 
         emit AutoDisclosed(reportId, block.timestamp);
+    }
+
+    /// @notice Reports are end-to-end encrypted, so disclosure needs someone who can
+    /// actually decrypt to release the key. Only the researcher (who always holds the
+    /// content key) can do so, and only once the report is marked Disclosed. Publishing
+    /// the symmetric content key makes the report permanently readable by anyone:
+    /// the researcher's right to disclose after the deadline, enforced without a server.
+    function publishDisclosureKey(uint256 reportId, bytes32 contentKey) external {
+        VulnerabilityRegistry.Report memory r = registry.getReport(reportId);
+        require(msg.sender == r.researcher, "Timer: not the researcher");
+        require(r.status == VulnerabilityRegistry.Status.Disclosed, "Timer: report not disclosed");
+        require(!keyPublished[reportId], "Timer: key already published");
+        require(contentKey != bytes32(0), "Timer: empty key");
+
+        keyPublished[reportId] = true;
+        disclosureKey[reportId] = contentKey;
+        emit DisclosureKeyPublished(reportId, contentKey);
     }
 
     function timeRemaining(uint256 reportId) external view returns (uint256) {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 /* Lucide-style stroke icons, inlined so the frontend needs no extra dependency. */
 const ICONS = {
@@ -135,6 +135,63 @@ const ICONS = {
     <>
       <circle cx="12" cy="12" r="10" />
       <path d="m4.9 4.9 14.2 14.2" />
+    </>
+  ),
+  key: (
+    <>
+      <path d="m21 2-9.6 9.6" />
+      <circle cx="7.5" cy="15.5" r="5.5" />
+      <path d="m15.5 7.5 3 3L22 7l-3-3" />
+    </>
+  ),
+  scale: (
+    <>
+      <path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" />
+      <path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" />
+      <path d="M7 21h10" />
+      <path d="M12 3v18" />
+      <path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" />
+    </>
+  ),
+  award: (
+    <>
+      <path d="m15.477 12.89 1.515 8.526a.5.5 0 0 1-.81.47l-3.58-2.687a1 1 0 0 0-1.197 0l-3.586 2.686a.5.5 0 0 1-.81-.469l1.514-8.526" />
+      <circle cx="12" cy="8" r="6" />
+    </>
+  ),
+  users: (
+    <>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </>
+  ),
+  unlock: (
+    <>
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10 9H8" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+    </>
+  ),
+  plus: (
+    <>
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </>
+  ),
+  send: (
+    <>
+      <path d="m22 2-7 20-4-9-9-4Z" />
+      <path d="M22 2 11 13" />
     </>
   ),
 };
@@ -336,3 +393,74 @@ export const CHAIN_NAMES = {
   31337: "Hardhat",
   1337: "Localhost",
 };
+
+/* ---- modal + decrypted report viewer ---- */
+
+export function Modal({ title, subtitle, onClose, children, wide = false }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div
+        className={`modal ${wide ? "wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <div>
+            <h2>{title}</h2>
+            {subtitle && <p>{subtitle}</p>}
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+            <Icon name="x" />
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+export function ReportView({ report }) {
+  return (
+    <div className="report-view">
+      <h3>{report.title}</h3>
+      <div className="rv-section">
+        <span className="label">Description</span>
+        <p>{report.description}</p>
+      </div>
+      {report.stepsToReproduce && (
+        <div className="rv-section">
+          <span className="label">Steps to reproduce</span>
+          <pre>{report.stepsToReproduce}</pre>
+        </div>
+      )}
+      {report.preparedAt && <p className="rv-foot">Encrypted {formatDate(report.preparedAt)}</p>}
+    </div>
+  );
+}
+
+/* ---- reputation ---- */
+
+export const RANK_NAMES = ["Rookie", "Hunter", "Elite", "Legend"];
+export const RANK_TONES = ["#94a3b8", "#38bdf8", "#a78bfa", "#f59e0b"];
+
+export function RankBadge({ rank }) {
+  return (
+    <span className="badge" style={{ "--tone": RANK_TONES[rank] }}>
+      {RANK_NAMES[rank]}
+    </span>
+  );
+}
+
+export function formatEth(wei) {
+  const n = Number(wei) / 1e18;
+  if (n === 0) return "0";
+  return n < 0.0001 ? n.toExponential(1) : parseFloat(n.toFixed(5)).toString();
+}

@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
-import { parseEther } from "ethers";
-import { getContracts } from "../utils/contracts";
+import { formatEther, parseEther } from "ethers";
+import { getContracts, errorMessage } from "../utils/contracts";
+import { decryptReport } from "../utils/e2ee";
+import { fetchEnvelope } from "../utils/api";
 import { BACKEND_URL, SEVERITY_LABELS } from "../config";
+import EncryptionKeyCard from "./EncryptionKeyCard.jsx";
 import {
   Alert,
   Empty,
   Icon,
+  Modal,
+  ReportView,
   SkeletonRows,
   Spinner,
   Stat,
@@ -16,13 +21,31 @@ import {
 
 const QUICK_AMOUNTS = ["0.1", "0.5", "1", "5"];
 
-export default function OrgDashboard({ signer, address }) {
+export default function OrgDashboard({ signer, address, crypto }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [fundAmount, setFundAmount] = useState("0.5");
   const [notice, setNotice] = useState(null); // { tone: info|success|error, text }
   const [busyKey, setBusyKey] = useState(null);
+  const [viewing, setViewing] = useState(null); // { id, content }
+  const [tiers, setTiers] = useState({ 1: "", 2: "", 3: "", 4: "" });
+  const [savedTiers, setSavedTiers] = useState({ 1: "", 2: "", 3: "", 4: "" });
+
+  async function loadTiers() {
+    try {
+      const { escrow } = getContracts(signer);
+      const values = await Promise.all([1, 2, 3, 4].map((l) => escrow.bountyTiers(address, l)));
+      const next = {};
+      values.forEach((v, i) => {
+        next[i + 1] = v === 0n ? "" : formatEther(v);
+      });
+      setTiers(next);
+      setSavedTiers(next);
+    } catch {
+      /* tiers stay blank */
+    }
+  }
 
   async function loadReports() {
     if (!address) return;
@@ -34,7 +57,7 @@ export default function OrgDashboard({ signer, address }) {
       if (!res.ok) throw new Error(data.error || "Failed to load reports");
       setReports(data.reports);
     } catch (err) {
-      setError(err.message);
+      setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -42,6 +65,7 @@ export default function OrgDashboard({ signer, address }) {
 
   useEffect(() => {
     loadReports();
+    loadTiers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 
@@ -54,10 +78,41 @@ export default function OrgDashboard({ signer, address }) {
       setNotice({ tone: "success", text: successText });
       if (reload) loadReports();
     } catch (err) {
-      setNotice({ tone: "error", text: err.message });
+      setNotice({ tone: "error", text: errorMessage(err) });
     } finally {
       setBusyKey(null);
     }
+  }
+
+  function handleRead(report) {
+    return run(
+      `read-${report.reportId}`,
+      "Unlocking your key and decrypting…",
+      async () => {
+        const keys = await crypto.ensureKeys();
+        const bytes = await fetchEnvelope(report.ipfsCID, report.reportHash);
+        setViewing({ id: report.reportId, content: decryptReport(bytes, address, keys.secretKey) });
+      },
+      `Report #${report.reportId} decrypted in your browser.`
+    );
+  }
+
+  function handleSaveTiers() {
+    return run(
+      "tiers",
+      "Saving bounty tiers…",
+      async () => {
+        const { escrow } = getContracts(signer);
+        for (const level of [1, 2, 3, 4]) {
+          if (tiers[level] !== "" && tiers[level] !== savedTiers[level]) {
+            const tx = await escrow.setBountyTier(level, parseEther(tiers[level]));
+            await tx.wait();
+          }
+        }
+        await loadTiers();
+      },
+      "Bounty tiers saved."
+    );
   }
 
   function handleFund() {
@@ -116,6 +171,7 @@ export default function OrgDashboard({ signer, address }) {
 
   const count = (...statuses) => reports.filter((r) => statuses.includes(r.status)).length;
   const amountValid = fundAmount.trim() !== "" && Number(fundAmount) > 0;
+  const anyTierBusy = Boolean(busyKey);
 
   return (
     <>
@@ -177,6 +233,7 @@ export default function OrgDashboard({ signer, address }) {
                   key={r.reportId}
                   report={r}
                   busyKey={busyKey}
+                  onRead={handleRead}
                   onApprove={handleApprove}
                   onRefundStake={handleRefundStake}
                   onDispute={handleDispute}
@@ -186,7 +243,49 @@ export default function OrgDashboard({ signer, address }) {
           )}
         </section>
 
-        <aside className="stack sticky">
+        <aside className="stack">
+          <EncryptionKeyCard signer={signer} address={address} crypto={crypto} />
+
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h2>Bounty tiers</h2>
+                <p>What you pay per severity. Required before you can approve a report.</p>
+              </div>
+              <span className="stat-icon">
+                <Icon name="award" />
+              </span>
+            </div>
+            <div className="tier-grid">
+              {[1, 2, 3, 4].map((level) => (
+                <div className="field" key={level}>
+                  <label htmlFor={`tier-${level}`}>{SEVERITY_LABELS[level]}</label>
+                  <div className="input-group">
+                    <input
+                      id={`tier-${level}`}
+                      className="input mono"
+                      inputMode="decimal"
+                      placeholder="0.0"
+                      value={tiers[level]}
+                      onChange={(e) => setTiers((t) => ({ ...t, [level]: e.target.value }))}
+                    />
+                    <span className="suffix">ETH</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost block"
+              style={{ marginTop: 16 }}
+              onClick={handleSaveTiers}
+              disabled={anyTierBusy || JSON.stringify(tiers) === JSON.stringify(savedTiers)}
+            >
+              {busyKey === "tiers" ? <Spinner /> : <Icon name="check" size="sm" />}
+              Save tiers
+            </button>
+          </section>
+
           <section className="card">
             <div className="card-head">
               <div>
@@ -245,11 +344,21 @@ export default function OrgDashboard({ signer, address }) {
           </section>
         </aside>
       </div>
+
+      {viewing && (
+        <Modal
+          title={`Report #${viewing.id}`}
+          subtitle="Decrypted locally — this content never touched a server in readable form."
+          onClose={() => setViewing(null)}
+        >
+          <ReportView report={viewing.content} />
+        </Modal>
+      )}
     </>
   );
 }
 
-function ReportRow({ report, busyKey, onApprove, onRefundStake, onDispute }) {
+function ReportRow({ report, busyKey, onRead, onApprove, onRefundStake, onDispute }) {
   const [severity, setSeverity] = useState(3);
   const anyBusy = Boolean(busyKey);
   const id = report.reportId;
@@ -276,6 +385,13 @@ function ReportRow({ report, busyKey, onApprove, onRefundStake, onDispute }) {
           </div>
         </div>
         <StatusBadge status={report.status} />
+      </div>
+
+      <div className="row-actions">
+        <button type="button" className="btn btn-ghost sm" onClick={() => onRead(report)} disabled={anyBusy}>
+          {busyKey === `read-${id}` ? <Spinner /> : <Icon name="unlock" size="sm" />}
+          Decrypt &amp; read
+        </button>
       </div>
 
       {report.status === "Submitted" && (

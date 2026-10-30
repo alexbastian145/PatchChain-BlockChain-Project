@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 
 const reportsRouter = require("./routes/reports");
+const ipfsRouter = require("./routes/ipfs");
 const queriesRouter = require("./routes/queries");
 
 const app = express();
@@ -14,6 +15,7 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/reports", reportsRouter);
+app.use("/api/ipfs", ipfsRouter);
 app.use("/api", queriesRouter);
 
 app.use((err, req, res, next) => {
