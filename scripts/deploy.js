@@ -10,16 +10,17 @@ async function main() {
   const REQUIRED_STAKE = parseEther("0.01"); // base researcher stake (discounted by reputation)
   const DISCLOSURE_WINDOW = 90 * 24 * 60 * 60; // 90 days, in seconds
 
-  // Arbitration court parameters. Override the periods for a quick demo, e.g.
+  // Arbitration court parameters. Each phase defaults to 60 seconds; override with e.g.
   //   COURT_EVIDENCE_SECONDS=120 COURT_COMMIT_SECONDS=120 COURT_REVEAL_SECONDS=120
   const COURT = {
     panelSize: num("COURT_PANEL_SIZE", 3),
     jurorDeposit: parseEther(process.env.COURT_JUROR_DEPOSIT || "0.05"),
     caseLock: parseEther(process.env.COURT_CASE_LOCK || "0.02"),
     fee: parseEther(process.env.COURT_FEE || "0.01"),
-    evidence: num("COURT_EVIDENCE_SECONDS", 24 * 60 * 60),
-    commit: num("COURT_COMMIT_SECONDS", 24 * 60 * 60),
-    reveal: num("COURT_REVEAL_SECONDS", 24 * 60 * 60),
+    // Demo-friendly default: 1 minute per phase. For a real deployment set these to hours/days.
+    evidence: num("COURT_EVIDENCE_SECONDS", 60),
+    commit: num("COURT_COMMIT_SECONDS", 60),
+    reveal: num("COURT_REVEAL_SECONDS", 60),
   };
 
   async function deploy(name, args = []) {
