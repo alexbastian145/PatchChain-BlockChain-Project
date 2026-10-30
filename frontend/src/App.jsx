@@ -79,7 +79,7 @@ function readCollapsed() {
 }
 
 export default function App() {
-  const { address, signer, chainId, error, connect, disconnect } = useWallet();
+  const { address, signer, chainId, error, connect, disconnect, switchAccount } = useWallet();
   const [tab, setTab] = useState("submit");
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [drawer, setDrawer] = useState(false);
@@ -174,9 +174,18 @@ export default function App() {
               {address.slice(2, 4).toUpperCase()}
             </span>
             <div className="account-meta">
-              <strong className="mono">{shortAddr(address)}</strong>
+              <strong className="mono" title={address}>{shortAddr(address)}</strong>
               <span>{network || "Connected"}</span>
             </div>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={switchAccount}
+              aria-label="Switch account"
+              title="Switch account"
+            >
+              <Icon name="refresh" />
+            </button>
             <button
               type="button"
               className="icon-btn"

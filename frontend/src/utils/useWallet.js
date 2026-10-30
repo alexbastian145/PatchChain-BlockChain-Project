@@ -35,19 +35,46 @@ export function useWallet() {
     }
   }, []);
 
-  const disconnect = useCallback(() => {
+  const clear = useCallback(() => {
     setAddress(null);
     setProvider(null);
     setSigner(null);
     setChainId(null);
   }, []);
 
+  const disconnect = useCallback(() => {
+    clear();
+    // Best effort: also revoke the site's access, so the next "Connect" shows MetaMask's
+    // account picker instead of silently reusing the previously connected account.
+    window.ethereum
+      ?.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] })
+      .catch(() => {});
+  }, [clear]);
+
+  /** Opens MetaMask's account picker so a different account can be connected to this site. */
+  const switchAccount = useCallback(async () => {
+    setError(null);
+    if (!window.ethereum) {
+      setError("MetaMask not detected. Please install the MetaMask browser extension.");
+      return;
+    }
+    try {
+      await window.ethereum.request({
+        method: "wallet_requestPermissions",
+        params: [{ eth_accounts: {} }],
+      });
+      await connect();
+    } catch (err) {
+      if (err?.code !== 4001) setError(err.message || "Failed to switch account"); // 4001 = user closed the picker
+    }
+  }, [connect]);
+
   useEffect(() => {
     if (!window.ethereum) return;
 
     const handleAccountsChanged = (accounts) => {
       if (accounts.length === 0) {
-        disconnect();
+        clear();
       } else {
         connect();
       }
@@ -63,7 +90,7 @@ export function useWallet() {
       window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
       window.ethereum.removeListener("chainChanged", handleChainChanged);
     };
-  }, [connect, disconnect]);
+  }, [connect, clear]);
 
-  return { address, provider, signer, chainId, error, connect, disconnect };
+  return { address, provider, signer, chainId, error, connect, disconnect, switchAccount };
 }
